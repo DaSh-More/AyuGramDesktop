@@ -320,9 +320,12 @@ private:
 	[[nodiscard]] auto mainRequest(Request &&request);
 
 	template <typename Request>
+	[[nodiscard]] auto plainRequest(Request &&request);
+
+	template <typename Request>
 	[[nodiscard]] auto splitRequest(int index, Request &&request);
 
-	[[nodiscard]] auto fileRequest(
+	mtpRequestId fileRequest(
 		const Data::FileLocation &location,
 		int64 offset);
 

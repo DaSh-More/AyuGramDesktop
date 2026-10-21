@@ -724,6 +724,17 @@ auto ApiWrap::mainRequest(Request &&request) {
 }
 
 template <typename Request>
+auto ApiWrap::plainRequest(Request &&request) {
+	auto original = std::move(_mtp.request(
+		std::forward<Request>(request)
+	).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)));
+
+	return RequestBuilder<Request>(
+		std::move(original),
+		[=](const MTP::Error &result) { error(result); });
+}
+
+template <typename Request>
 auto ApiWrap::splitRequest(int index, Request &&request) {
 	Expects(index < _splits.size());
 
@@ -735,20 +746,24 @@ auto ApiWrap::splitRequest(int index, Request &&request) {
 		std::forward<Request>(request)));
 }
 
-auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset) {
+mtpRequestId ApiWrap::fileRequest(
+		const Data::FileLocation &location,
+		int64 offset) {
 	Expects(location.dcId != 0
 		|| location.data.type() == mtpc_inputTakeoutFileLocation);
 	Expects(_takeoutId.has_value());
 	Expects(_fileProcess->requestId == 0);
 
-	return std::move(_mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
-		MTP_long(*_takeoutId),
-		MTPupload_GetFile(
-			MTP_flags(0),
-			location.data,
-			MTP_long(offset),
-			MTP_int(kFileChunkSize))
-	)).fail([=](const MTP::Error &result) {
+	auto request = MTPupload_GetFile(
+		MTP_flags(0),
+		location.data,
+		MTP_long(offset),
+		MTP_int(kFileChunkSize));
+	const auto done = [=](const MTPupload_File &result) {
+		_fileProcess->requestId = 0;
+		filePartDone(offset, result);
+	};
+	const auto fail = [=](const MTP::Error &result) {
 		_fileProcess->requestId = 0;
 		if (result.type() == u"TAKEOUT_FILE_EMPTY"_q
 			&& _otherDataProcess != nullptr) {
@@ -766,9 +781,23 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset) {
 			&& result.type().startsWith(u"FILE_REFERENCE_"_q)) {
 			filePartRefreshReference(offset);
 		} else {
-			error(std::move(result));
+			error(result);
 		}
-	}).toDC(MTP::ShiftDcId(location.dcId, MTP::kExportMediaDcShift)));
+	};
+	const auto dcId = MTP::ShiftDcId(
+		location.dcId,
+		MTP::kExportMediaDcShift);
+
+	// AyuGram noForwards: takeout gives nothing for such chats
+	if (_chatProcess && _chatProcess->info.noForwards) {
+		return _mtp.request(
+			std::move(request)
+		).done(done).fail(fail).toDC(dcId).send();
+	}
+	return _mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
+		MTP_long(*_takeoutId),
+		std::move(request)
+	)).done(done).fail(fail).toDC(dcId).send();
 }
 
 ApiWrap::ApiWrap(
@@ -2259,8 +2288,33 @@ void ApiWrap::requestChatMessages(
 	const auto realSplitIndex = (splitIndex >= 0)
 		? splitIndex
 		: (splitsCount + splitIndex);
+
+	// AyuGram noForwards: takeout gives nothing for such chats, so request
+	// without it. There are no message ranges then, the whole history
+	// comes in the last split.
+	const auto noForwards = _chatProcess->info.noForwards;
+	if (noForwards && realSplitIndex != splitsCount - 1) {
+		doneHandler(MTP_messages_messages(
+			MTP_vector<MTPMessage>(),
+			MTP_vector<MTPForumTopic>(),
+			MTP_vector<MTPChat>(),
+			MTP_vector<MTPUser>()));
+		return;
+	}
+	const auto send = [&](auto &&request, Fn<bool(const MTP::Error&)> fail) {
+		if (noForwards) {
+			plainRequest(
+				std::move(request)
+			).fail(std::move(fail)).done(doneHandler).send();
+		} else {
+			splitRequest(
+				realSplitIndex,
+				std::move(request)
+			).fail(std::move(fail)).done(doneHandler).send();
+		}
+	};
 	if (_chatProcess->info.onlyMyMessages) {
-		splitRequest(realSplitIndex, MTPmessages_Search(
+		send(MTPmessages_Search(
 			MTP_flags(MTPmessages_Search::Flag::f_from_id),
 			realPeerInput,
 			MTP_string(), // query
@@ -2277,9 +2331,9 @@ void ApiWrap::requestChatMessages(
 			MTP_int(0), // max_id
 			MTP_int(0), // min_id
 			MTP_long(0) // hash
-		)).done(doneHandler).send();
+		), nullptr);
 	} else {
-		splitRequest(realSplitIndex, MTPmessages_GetHistory(
+		send(MTPmessages_GetHistory(
 			realPeerInput,
 			MTP_int(offsetId),
 			MTP_int(0), // offset_date
@@ -2288,7 +2342,7 @@ void ApiWrap::requestChatMessages(
 			MTP_int(0), // max_id
 			MTP_int(0), // min_id
 			MTP_long(0)  // hash
-		)).fail([=](const MTP::Error &error) {
+		), [=](const MTP::Error &error) {
 			Expects(_chatProcess != nullptr);
 
 			if (error.type() == u"CHANNEL_PRIVATE"_q) {
@@ -2308,7 +2362,7 @@ void ApiWrap::requestChatMessages(
 				}
 			}
 			return false;
-		}).done(doneHandler).send();
+		});
 	}
 }
 
@@ -3428,11 +3482,7 @@ void ApiWrap::loadFilePart() {
 	_fileProcess->requests.push_back({ offset });
 	_fileProcess->requestId = fileRequest(
 		_fileProcess->location,
-		_fileProcess->offset
-	).done([=](const MTPupload_File &result) {
-		_fileProcess->requestId = 0;
-		filePartDone(offset, result);
-	}).send();
+		_fileProcess->offset);
 	_fileProcess->offset += kFileChunkSize;
 
 	if (_fileProcess->size > 0
@@ -3527,11 +3577,7 @@ void ApiWrap::filePartRetryReference(
 	_fileProcess->location = std::move(location);
 	_fileProcess->requestId = fileRequest(
 		_fileProcess->location,
-		offset
-	).done([=](const MTPupload_File &result) {
-		_fileProcess->requestId = 0;
-		filePartDone(offset, result);
-	}).send();
+		offset);
 }
 
 void ApiWrap::filePartRefreshReference(int64 offset) {

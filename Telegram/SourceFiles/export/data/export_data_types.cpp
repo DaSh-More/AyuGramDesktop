@@ -2061,6 +2061,7 @@ Chat ParseChat(const MTPChat &data) {
 		result.bareId = data.vid().v;
 		result.title = ParseString(data.vtitle());
 		result.input = MTP_inputPeerChat(MTP_long(result.bareId));
+		result.noForwards = data.is_ayuNoforwards();
 		if (const auto migratedTo = data.vmigrated_to()) {
 			result.migratedToChannelId = migratedTo->match(
 			[](const MTPDinputChannel &data) {
@@ -2089,6 +2090,7 @@ Chat ParseChat(const MTPChat &data) {
 		result.isMonoforum = data.is_monoforum();
 		result.isBroadcast = data.is_broadcast();
 		result.isSupergroup = data.is_megagroup();
+		result.noForwards = data.is_ayuNoforwards();
 		result.hasMonoforumAdminRights = data.is_broadcast()
 			&& (data.is_creator()
 				|| (data.vadmin_rights()
@@ -3261,6 +3263,8 @@ DialogsInfo ParseDialogsInfo(const MTPmessages_Dialogs &data) {
 					: 0;
 				info.isMonoforum = peer.chat()
 					&& peer.chat()->isMonoforum;
+				info.noForwards = peer.chat()
+					&& peer.chat()->noForwards;
 				info.monoforumBroadcastInput = peer.chat()
 					? peer.chat()->monoforumBroadcastInput
 					: MTPInputPeer(MTP_inputPeerEmpty());
@@ -3303,6 +3307,7 @@ DialogInfo DialogInfoFromChat(const Chat &data) {
 	result.type = DialogTypeFromChat(data);
 	result.migratedToChannelId = data.migratedToChannelId;
 	result.isMonoforum = data.isMonoforum;
+	result.noForwards = data.noForwards;
 	if (data.isMonoforumAdmin) {
 		result.monoforumBroadcastInput = data.monoforumBroadcastInput;
 	}

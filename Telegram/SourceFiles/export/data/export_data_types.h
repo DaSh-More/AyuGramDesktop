@@ -661,6 +661,7 @@ struct Chat {
 	bool hasMonoforumAdminRights = false;
 	bool isMonoforumOfPublicBroadcast = false;
 	BareId monoforumLinkId = 0;
+	bool noForwards = false;
 
 	MTPInputPeer input = MTP_inputPeerEmpty();
 	MTPInputPeer monoforumBroadcastInput = MTP_inputPeerEmpty();
@@ -1368,6 +1369,7 @@ struct DialogInfo {
 	bool onlyMyMessages = false;
 	bool isLeftChannel = false;
 	bool isMonoforum = false;
+	bool noForwards = false;
 	QString relativePath;
 
 	// Filled when requesting dialog messages.
