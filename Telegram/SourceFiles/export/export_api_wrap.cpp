@@ -2289,8 +2289,8 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	// AyuGram noForwards: takeout gives nothing for such chats, so request
-	// without it. There are no message ranges then, the whole history
+	// WHY: takeout gives nothing for chats with forwarding restricted, and
+	// without takeout there are no message ranges, so the whole history
 	// comes in the last split.
 	const auto noForwards = _chatProcess->info.noForwards;
 	if (noForwards && realSplitIndex != splitsCount - 1) {
